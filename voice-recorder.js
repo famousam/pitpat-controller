@@ -93,7 +93,7 @@
   }
 
   class VoiceRecorder {
-    constructor({ store, getUserMedia, Recorder, estimate, acquireLock = async () => () => {}, now = () => performance.now(), schedule = setInterval, cancel = clearInterval, onUpdate = () => {}, onComplete = () => {}, onInterrupt = () => {} }) {
+    constructor({ store, getUserMedia, Recorder, estimate, acquireLock = async () => () => {}, now = () => performance.now(), schedule = (fn, ms) => setInterval(fn, ms), cancel = timer => clearInterval(timer), onUpdate = () => {}, onComplete = () => {}, onInterrupt = () => {} }) {
       Object.assign(this, { store, getUserMedia, Recorder, estimate, acquireLock, now, schedule, cancel, onUpdate, onComplete, onInterrupt });
       this.state = 'idle'; this.session = null; this.result = null; this.timer = null;
       this.elapsedMs = 0; this.activeSince = null; this.available = null;
@@ -150,6 +150,10 @@
         this.update();
       } catch (error) {
         this.signalInterrupt(error.message || 'Recording could not start.');
+        if (this.recorder && this.recorder.state !== 'inactive') {
+          this.recorder.ondataavailable = null; this.recorder.onstop = null; this.recorder.onerror = null;
+          try { this.recorder.stop(); } catch (_) { /* Track cleanup below also ends microphone capture. */ }
+        }
         this.state = 'saving'; this.sealTime(); await this.finalize();
         throw error;
       }
