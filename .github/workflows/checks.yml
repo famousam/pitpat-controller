@@ -1,0 +1,33 @@
+name: Controller and voice checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+      - name: Controller and recording checks
+        run: |
+          node tests/core.test.cjs
+          node tests/voice.test.cjs
+      - name: Install browser test tools
+        run: |
+          npm install --no-save --no-package-lock playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: Browser checks with simulated Bluetooth and microphone
+        env:
+          PITPAT_QA_DIR: artifacts/browser
+        run: node tests/browser.test.cjs
