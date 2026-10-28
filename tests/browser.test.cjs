@@ -330,7 +330,7 @@ test('mobile layout fits Pixel and smaller widths; app loads only local runtime 
   assert.deepEqual(external, []);
   const paths = new Set(requests.map(url => new URL(url).pathname));
   for (const requestPath of paths) assert.ok(['/', '/controller-core.js', '/treadmill.js', '/voice-recorder.js', '/voice-notes.js', '/favicon.ico'].includes(requestPath), `Unexpected runtime request: ${requestPath}`);
-  assert.deepEqual(await page.locator('script[src]').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))), ['controller-core.js?v=1.1.2', 'treadmill.js?v=1.1.2', 'voice-recorder.js?v=1.1.2', 'voice-notes.js?v=1.1.2']);
+  assert.deepEqual(await page.locator('script[src]').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))), ['controller-core.js?v=1.1.3', 'treadmill.js?v=1.1.3', 'voice-recorder.js?v=1.1.3', 'voice-notes.js?v=1.1.3']);
   assert.deepEqual(errors, []);
 });
 
@@ -443,7 +443,8 @@ test('closing the recording page requests Stop before Bluetooth teardown', async
   await page.waitForFunction(() => document.getElementById('voiceIndicator').textContent === 'Recording');
   await page.waitForTimeout(300);
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
-  assert.equal((await writes(page)).filter(item => item.type === 'stop').length, 1);
+  const observed = await writes(page);
+  assert.equal(observed.filter(item => item.type === 'stop').length, 1, JSON.stringify({ writes: observed, message: await page.locator('#message').textContent(), voice: await page.locator('#voiceStatus').textContent() }));
   assert.equal((await writes(page)).filter(item => ['start', 'set_speed'].includes(item.type)).length, 0);
   await page.waitForFunction(() => document.querySelectorAll('#voiceNotesList li').length === 1);
   assert.match(await page.locator('#voiceNotesList').textContent(), /Partial \/ interrupted/);
