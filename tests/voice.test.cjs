@@ -11,7 +11,7 @@ class FakeRecorder {
   emit(text) { this.ondataavailable({ data: new Blob([text], { type: this.mimeType }) }); }
   pause() { this.state = 'paused'; }
   resume() { this.state = 'recording'; }
-  stop() { this.stops += 1; this.state = 'inactive'; queueMicrotask(() => this.onstop()); }
+  stop() { this.stops += 1; this.state = 'inactive'; queueMicrotask(() => this.onstop?.()); }
   unexpectedStop() { this.state = 'inactive'; this.onstop(); }
 }
 
