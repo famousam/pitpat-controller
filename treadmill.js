@@ -549,7 +549,11 @@
     void updateWakeLock();
   });
   document.addEventListener('freeze', () => suspendObservation('Chrome suspended the controller page.'));
-  window.addEventListener('pagehide', () => teardown('The controller page was closed or navigated away.', false));
+  window.addEventListener('pagehide', () => {
+    // Let an active voice recorder request Stop while this GATT link exists.
+    document.dispatchEvent(new Event('pitpat-before-bluetooth-teardown'));
+    teardown('The controller page was closed or navigated away.', false);
+  });
   setInterval(() => {
     if (state.connected && state.lastValid && performance.now() - state.lastValid > FRESH_MS && !state.stale) {
       state.stale = true; state.validCount = 0;
