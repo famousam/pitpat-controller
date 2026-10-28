@@ -1,5 +1,5 @@
 /*
- * PitPat WebBT — improved controller core, version 1.1.1.
+ * PitPat WebBT — improved controller core, version 1.1.2.
  * Protocol interoperability based on KeiranY/PitPat-WebBT (Unlicense) and
  * the documented BA09-B packet vectors in heilmic/treadmill-tray.
  * No hardware validation is implied. Receive checksums are NOT verified:
@@ -13,7 +13,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '1.1.1';
+  const VERSION = '1.1.2';
   const SERVICE_UUID = '0000fba0-0000-1000-8000-00805f9b34fb';
   const WRITE_UUID = '0000fba1-0000-1000-8000-00805f9b34fb';
   const NOTIFY_UUID = '0000fba2-0000-1000-8000-00805f9b34fb';
