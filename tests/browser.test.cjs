@@ -330,7 +330,7 @@ test('mobile layout fits Pixel and smaller widths; app loads only local runtime 
   assert.deepEqual(external, []);
   const paths = new Set(requests.map(url => new URL(url).pathname));
   for (const requestPath of paths) assert.ok(['/', '/controller-core.js', '/treadmill.js', '/voice-recorder.js', '/voice-notes.js', '/favicon.ico'].includes(requestPath), `Unexpected runtime request: ${requestPath}`);
-  assert.deepEqual(await page.locator('script[src]').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))), ['controller-core.js?v=1.1.0', 'treadmill.js?v=1.1.0', 'voice-recorder.js?v=1.1.0', 'voice-notes.js?v=1.1.0']);
+  assert.deepEqual(await page.locator('script[src]').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))), ['controller-core.js?v=1.1.1', 'treadmill.js?v=1.1.1', 'voice-recorder.js?v=1.1.1', 'voice-notes.js?v=1.1.1']);
   assert.deepEqual(errors, []);
 });
 
@@ -392,7 +392,7 @@ function mockVoice() {
     resume() { this.state = 'recording'; }
     stop() {
       clearInterval(this.timer); this.state = 'inactive';
-      queueMicrotask(() => { this.ondataavailable({ data: new Blob(['final-simulated-audio'], { type: this.mimeType }) }); this.onstop(); });
+      queueMicrotask(() => { this.ondataavailable?.({ data: new Blob(['final-simulated-audio'], { type: this.mimeType }) }); this.onstop?.(); });
     }
   };
 }
@@ -402,7 +402,8 @@ test('voice chunks survive reload and low storage requests a pad Stop without op
   await ready(page);
   await page.waitForFunction(() => !document.getElementById('voiceRecordBtn').disabled);
   await page.locator('#voiceRecordBtn').click();
-  await page.waitForFunction(() => document.getElementById('voiceStatus').textContent.includes('saved so far'));
+  await page.waitForFunction(() => document.getElementById('voiceIndicator').textContent === 'Recording' || document.getElementById('voiceStatus').textContent.includes('Stop request was attempted'));
+  assert.equal(await page.locator('#voiceIndicator').textContent(), 'Recording', await page.locator('#voiceStatus').textContent());
   await page.waitForTimeout(500);
   await page.locator('#voiceSaveBtn').click();
   await page.waitForFunction(() => document.querySelectorAll('#voiceNotesList li').length === 1);
@@ -423,6 +424,8 @@ test('a lost microphone saves a partial voice note and requests a pad Stop', asy
   await ready(page);
   await page.waitForFunction(() => !document.getElementById('voiceRecordBtn').disabled);
   await page.locator('#voiceRecordBtn').click();
+  await page.waitForFunction(() => document.getElementById('voiceIndicator').textContent === 'Recording' || document.getElementById('voiceStatus').textContent.includes('Stop request was attempted'));
+  assert.equal(await page.locator('#voiceIndicator').textContent(), 'Recording', await page.locator('#voiceStatus').textContent());
   await page.waitForTimeout(500);
   await page.evaluate(() => window.__voice.track.onended());
   await expectWrites(page, 'stop', 1);
