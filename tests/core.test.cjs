@@ -100,6 +100,49 @@ test('telemetry rejects incomplete, wrapped, wrongly framed and unsupported-mode
   assert.throws(() => core.parseTelemetry([]));
 });
 
+test('notification diagnostics describe only framing and respect byte offsets', () => {
+  const bytes = frame();
+  bytes.set(Buffer.from('PRIVATE-SERIAL01'), 32);
+  assert.equal(core.describeNotification(bytes), '52 bytes; header 0x68; declared length 52; trailer 0x43');
+  const padded = new Uint8Array(60).fill(0xaa);
+  padded.set(bytes, 4);
+  assert.equal(core.describeNotification(new DataView(padded.buffer, 4, 52)), core.describeNotification(bytes));
+  assert.equal(core.describeNotification(new Uint8Array()), '0 bytes; header missing; declared length missing; trailer missing');
+  assert.equal(core.describeNotification(new Uint8Array([0x69])), '1 bytes; header 0x69; declared length missing; trailer 0x69');
+  for (const [offset, value] of [[0, 0x69], [1, 47], [51, 0]]) {
+    const invalid = bytes.slice();
+    invalid[offset] = value;
+    assert.notEqual(core.describeNotification(invalid), core.describeNotification(bytes));
+    assert.throws(() => core.parseTelemetry(invalid), /frame/);
+  }
+  assert.throws(() => core.describeNotification([]), /byte array/);
+});
+
+test('observed PitPat-T01 60-byte 0x67 profile uses the existing status fields', () => {
+  // Captured status prefix; identifying/extended fields are zeroed.
+  const bytes = frame({ size: 60, speed: 0, target: 0, flags: 0, distance: 0, steps: 0, calories: 0, duration: 0 });
+  bytes[0] = 0x67; bytes[24] = 0; bytes[25] = 37;
+  const stopped = core.parseTelemetry(bytes);
+  assert.equal(stopped.state, 'stopped');
+  assert.equal(stopped.speed, 0);
+  assert.equal(stopped.targetSpeed, 0);
+  assert.equal(stopped.maxSpeed, 6);
+  assert.equal(stopped.firmware, 37);
+  const walking = bytes.slice();
+  walking[26] = 8;
+  new DataView(walking.buffer).setUint16(3, 1000);
+  assert.equal(core.parseTelemetry(walking).state, 'running');
+  assert.equal(core.parseTelemetry(walking).speed, 1);
+  for (const size of [31, 52, 59, 61]) {
+    const invalid = frame({ size }); invalid[0] = 0x67;
+    assert.throws(() => core.parseTelemetry(invalid), /frame/);
+  }
+  for (const [offset, value] of [[1, 59], [59, 0], [27, 0xff]]) {
+    const invalid = bytes.slice(); invalid[offset] = value;
+    assert.throws(() => core.parseTelemetry(invalid));
+  }
+});
+
 test('queue serializes all writes and Stop supersedes unsent motion and heartbeat', async () => {
   const operations = [];
   const gates = [];
