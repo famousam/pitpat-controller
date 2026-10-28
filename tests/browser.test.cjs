@@ -24,7 +24,7 @@ before(async () => {
       const url = new URL(request.url, 'http://localhost');
       if (url.pathname === '/favicon.ico') { response.writeHead(204); response.end(); return; }
       const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-      if (!['index.html', 'controller-core.js', 'treadmill.js'].includes(file)) {
+      if (!['index.html', 'controller-core.js', 'treadmill.js', 'voice-recorder.js', 'voice-notes.js'].includes(file)) {
         response.writeHead(404); response.end(); return;
       }
       const data = await fs.readFile(path.join(root, file));
@@ -119,9 +119,9 @@ function mockBluetooth(storage) {
     emit: (data = {}) => {
       const state = data.state || 'stopped';
       const values = { speed: state === 'running' ? 2 : 0, target: state === 'running' ? 2 : 0, distance: 0, steps: 0, calories: 0, cycle: 1, ...data };
-      const bytes = new Uint8Array(52);
+      const bytes = new Uint8Array(values.size || 52);
       const view = new DataView(bytes.buffer);
-      bytes[0] = 0x68; bytes[1] = 52;
+      bytes[0] = values.header ?? 0x68; bytes[1] = bytes.length;
       view.setUint16(3, Math.round(values.speed * 1000), false);
       view.setUint16(5, Math.round(values.target * 1000), false);
       view.setUint32(7, Math.round(values.distance * 1000), false);
@@ -130,12 +130,16 @@ function mockBluetooth(storage) {
       bytes[24] = values.cycle; bytes[25] = 42;
       bytes[26] = { stopped: 0, running: 8, paused: 16, countdown: 24 }[state];
       view.setUint16(27, 6000, false);
-      bytes[51] = 0x43;
+      bytes[bytes.length - 1] = 0x43;
       rx.value = view;
       rx.dispatchEvent(new Event('characteristicvaluechanged'));
     },
     malformed: () => {
       rx.value = new DataView(new Uint8Array(9).buffer);
+      rx.dispatchEvent(new Event('characteristicvaluechanged'));
+    },
+    notify: bytes => {
+      rx.value = new DataView(new Uint8Array(bytes).buffer);
       rx.dispatchEvent(new Event('characteristicvaluechanged'));
     }
   };
@@ -168,6 +172,7 @@ async function createPage(t, storage = {}) {
     return route.continue();
   });
   await page.addInitScript(mockBluetooth, storage);
+  await page.addInitScript(mockVoice);
   await page.goto(origin, { waitUntil: 'load' });
   await page.waitForFunction(() => window.PitPatCore && document.getElementById('buildVersion').textContent.includes('Improved'));
   return { page, external, requests, errors };
@@ -324,7 +329,105 @@ test('mobile layout fits Pixel and smaller widths; app loads only local runtime 
   await page.screenshot({ path: path.join(qa, 'pixel-controller.png'), fullPage: true });
   assert.deepEqual(external, []);
   const paths = new Set(requests.map(url => new URL(url).pathname));
-  for (const requestPath of paths) assert.ok(['/', '/controller-core.js', '/treadmill.js', '/favicon.ico'].includes(requestPath), `Unexpected runtime request: ${requestPath}`);
-  assert.deepEqual(await page.locator('script[src]').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))), ['controller-core.js', 'treadmill.js']);
+  for (const requestPath of paths) assert.ok(['/', '/controller-core.js', '/treadmill.js', '/voice-recorder.js', '/voice-notes.js', '/favicon.ico'].includes(requestPath), `Unexpected runtime request: ${requestPath}`);
+  assert.deepEqual(await page.locator('script[src]').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))), ['controller-core.js?v=1.1.0', 'treadmill.js?v=1.1.0', 'voice-recorder.js?v=1.1.0', 'voice-notes.js?v=1.1.0']);
+  assert.deepEqual(errors, []);
+});
+
+test('unsupported frames stay blocked and provide bounded diagnostics without serials or history', async t => {
+  const { page, errors } = await createPage(t);
+  await ready(page);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async text => { window.__copiedDiagnostics = text; }
+    } });
+    for (let header = 0x70; header < 0x79; header += 1) {
+      const bytes = new Uint8Array(52);
+      bytes[0] = header; bytes[1] = 52; bytes[51] = 0x43;
+      bytes.set(new TextEncoder().encode('PRIVATE-SERIAL01'), 32);
+      window.__ble.notify(Array.from(bytes));
+    }
+  });
+  assert.equal(await page.locator('#startBtn').isDisabled(), true);
+  assert.equal(await page.locator('#stopBtn').isDisabled(), false);
+  const diagnostics = await page.locator('#notificationDiagnostics').inputValue();
+  assert.match(diagnostics, /Notifications received: 11/);
+  assert.match(diagnostics, /52 bytes; header 0x78; declared length 52; trailer 0x43/);
+  assert.match(diagnostics, /Unrecognized treadmill frame/);
+  assert.equal(diagnostics.split('\n').filter(line => line.startsWith('1×')).length, 6);
+  assert.doesNotMatch(diagnostics, /PRIVATE|SERIAL|PitPat-T01|mock-only|history|0x70;/);
+  await page.locator('summary').click();
+  await page.locator('#copyDiagnosticsBtn').click();
+  assert.equal(await page.evaluate(() => window.__copiedDiagnostics), diagnostics);
+  assert.deepEqual((await writes(page)).filter(item => item.type !== 'heartbeat'), []);
+  assert.deepEqual(errors, []);
+});
+
+test('the observed 60-byte 0x67 pad can report idle without sending motion', async t => {
+  const { page, errors } = await createPage(t);
+  await ready(page, { header: 0x67, size: 60 });
+  assert.equal(await page.locator('#beltState').textContent(), 'Ready');
+  assert.equal(await page.locator('#actualSpeed').textContent(), '0.0');
+  assert.equal(await page.locator('#startBtn').isDisabled(), false);
+  assert.deepEqual((await writes(page)).filter(item => item.type !== 'heartbeat'), []);
+  assert.deepEqual(errors, []);
+});
+
+function mockVoice() {
+  const voice = window.__voice = { available: 100 * 1024 * 1024, captures: 0, stoppedTracks: 0 };
+  Object.defineProperty(navigator.storage, 'estimate', { configurable: true, value: async () => ({ quota: voice.available, usage: 0 }) });
+  Object.defineProperty(navigator.storage, 'persist', { configurable: true, value: async () => true });
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+    getUserMedia: async () => {
+      voice.captures += 1;
+      voice.track = { onended: null, stop: () => { voice.stoppedTracks += 1; } };
+      return { getAudioTracks: () => [voice.track], getTracks: () => [voice.track] };
+    }
+  } });
+  window.MediaRecorder = class {
+    static isTypeSupported(type) { return type === 'audio/webm;codecs=opus'; }
+    constructor() { this.mimeType = 'audio/webm;codecs=opus'; this.state = 'inactive'; voice.recorder = this; }
+    start() { this.state = 'recording'; this.timer = setInterval(() => { if (this.state === 'recording') this.ondataavailable({ data: new Blob(['simulated-audio'], { type: this.mimeType }) }); }, 200); }
+    pause() { this.state = 'paused'; }
+    resume() { this.state = 'recording'; }
+    stop() {
+      clearInterval(this.timer); this.state = 'inactive';
+      queueMicrotask(() => { this.ondataavailable({ data: new Blob(['final-simulated-audio'], { type: this.mimeType }) }); this.onstop(); });
+    }
+  };
+}
+
+test('voice chunks survive reload and low storage requests a pad Stop without opening the microphone', async t => {
+  const { page, errors } = await createPage(t);
+  await ready(page);
+  await page.waitForFunction(() => !document.getElementById('voiceRecordBtn').disabled);
+  await page.locator('#voiceRecordBtn').click();
+  await page.waitForFunction(() => document.getElementById('voiceStatus').textContent.includes('saved so far'));
+  await page.waitForTimeout(500);
+  await page.locator('#voiceSaveBtn').click();
+  await page.waitForFunction(() => document.querySelectorAll('#voiceNotesList li').length === 1);
+  assert.equal((await writes(page)).filter(item => item.type !== 'heartbeat').length, 0);
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('#voiceNotesList li').length === 1 && !document.getElementById('voiceRecordBtn').disabled);
+  await ready(page);
+  await page.evaluate(() => { window.__voice.available = 1024; });
+  await page.locator('#voiceRecordBtn').click();
+  await expectWrites(page, 'stop', 1);
+  assert.equal(await page.evaluate(() => window.__voice.captures), 0);
+  assert.match(await page.locator('#voiceStatus').textContent(), /Not enough/);
+  assert.deepEqual(errors, []);
+});
+
+test('a lost microphone saves a partial voice note and requests a pad Stop', async t => {
+  const { page, errors } = await createPage(t);
+  await ready(page);
+  await page.waitForFunction(() => !document.getElementById('voiceRecordBtn').disabled);
+  await page.locator('#voiceRecordBtn').click();
+  await page.waitForTimeout(500);
+  await page.evaluate(() => window.__voice.track.onended());
+  await expectWrites(page, 'stop', 1);
+  await page.waitForFunction(() => document.querySelectorAll('#voiceNotesList li').length === 1);
+  assert.match(await page.locator('#voiceNotesList').textContent(), /Partial \/ interrupted/);
+  assert.equal(await page.evaluate(() => window.__voice.stoppedTracks), 1);
   assert.deepEqual(errors, []);
 });
