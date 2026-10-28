@@ -13,6 +13,8 @@ Keep these files together in the published folder:
 - `index.html` — responsive screen and embedded CSS.
 - `controller-core.js` — protocol, command, and session logic.
 - `treadmill.js` — browser Bluetooth and screen behavior.
+- `voice-recorder.js` — incremental audio storage and recording supervision.
+- `voice-notes.js` — voice-note controls, recovery, downloads, and sharing.
 - `LICENSE` — upstream code license.
 
 There is no build step, npm installation, backend, or service worker. The phone needs Chrome, Bluetooth enabled, and access to the HTTPS page. The app loads no third-party scripts, fonts, or styles.
@@ -53,6 +55,8 @@ For a home-screen icon, current Chrome uses **⋮ → Install and create shortcu
 
 ## Everyday controls
 
+If the pad connects but reports **Unrecognized treadmill frame**, open **Connection details & first-use notes** and tap **Copy diagnostics** after a few seconds. The diagnostics show notification lengths, header/trailer bytes, and validation results, with up to six distinct recent formats. They exclude full packets, device identifiers, and workout history, and are kept only in memory. Share the copied text to investigate compatibility. Reconnecting starts a new diagnostic capture. Build **1.1.0** also supports the 60-byte `0x67` status format observed from a connected PitPat-T01 running firmware 37.
+
 - **Selected speed:** preselect a target from **1.0 to 6.0 km/h**. Selecting a speed while stopped stores the preference without starting the belt.
 - **Start:** explicitly applies the selected speed. Begin hardware testing at **1.0 km/h**.
 - **Speed − / +:** adjust the running target in **0.1 km/h** steps.
@@ -61,6 +65,18 @@ For a home-screen icon, current Chrome uses **⋮ → Install and create shortcu
 - **Usual speed:** estimates the speed used for the longest observed running time and can preselect it for a later workout. Restoring a preference never issues a movement command.
 
 Commands are serialized. Disconnects and stale connection state cancel unsent commands; reconnecting does not replay an old Start or speed command. A command already handed to Bluetooth cannot be recalled by JavaScript. A successful write is not proof that the motor has stopped: check live status and the belt.
+
+## Voice notes
+
+Use **Record voice note**, allow microphone access, and keep this page visible. **Pause** and **Resume** keep one note together. **Stop & save** finishes it. Audio is saved in IndexedDB in roughly one-second chunks as it arrives, using strict write durability, instead of keeping the whole recording in memory until the end. The app requests protection from automatic storage eviction where supported.
+
+Before starting, the app checks the browser's storage estimate for an 8 MiB reserve plus approximately one minute of 64 kbit/s audio. It checks again every second. Low estimated space, a failed write, a stalled recorder, system microphone interruption, or a hidden/closing page ends recording and requests **Stop** on a connected walking pad. Intentional Pause and Stop & save do not stop the pad. A normal recording can run without a pad connection.
+
+The estimate describes browser-managed storage, not a guaranteed amount of physical free disk space. Actual write failures are handled even when the estimate appeared sufficient. After interruption or reload, the saved segments appear as a partial note with **Listen / recover**, **Download audio**, and, where supported, **Share audio**. An interrupted final segment may be incomplete. Clearing site data or browser storage eviction removes local notes; download or share important recordings promptly.
+
+**Share audio** opens the device's share sheet. Choose Google Chat or another app if it accepts the audio format. If file sharing is unavailable, download the audio and attach it manually. Opus in WebM is preferred; compatible browsers may use another recording format. The site does not upload audio or perform transcription. Use the saved file with your Parakeet workflow.
+
+An audio failure triggers a best-effort Bluetooth Stop request, not a guaranteed motor stop. JavaScript cannot act while the phone or page is suspended or terminated, and it cannot send over a lost Bluetooth connection. Verify the belt and keep the physical remote available.
 
 ## Workout records
 
@@ -91,7 +107,7 @@ If a control behaves unexpectedly, stop with the physical remote and discontinue
 
 This app targets the FBA protocol documented by [PitPat-WebBT](https://github.com/KeiranY/PitPat-WebBT) and the [BA09-B controller's protocol reference](https://github.com/heilmic/treadmill-tray/blob/main/docs/reference/hex-commands.md): service **FBA0**, writes **FBA1**, and notifications **FBA2**.
 
-Incoming status must match the recognized **0x68 / declared length / 0x43 trailer** framing and plausible fields before movement is enabled. **The received-packet checksum has not been verified against your firmware.** Framing and plausibility checks cannot prove every reading is correct. A different firmware layout is rejected rather than guessed. The selected movement range remains capped at **6.0 km/h**.
+Incoming status must match the recognized **0x68 / declared length / 0x43 trailer** framing, or the observed **60-byte 0x67 / 0x3c / 0x43** status format, and plausible fields before movement is enabled. Other `0x67` lengths remain rejected. **The received-packet checksum has not been verified against your firmware.** Framing and plausibility checks cannot prove every reading is correct. A different firmware layout is rejected rather than guessed. The selected movement range remains capped at **6.0 km/h**.
 
 HTTPS authenticates and encrypts delivery of the web page. It does not add authentication to the treadmill's Bluetooth firmware. Only run code you trust and grant access to your own pad.
 
@@ -107,11 +123,11 @@ If you need dependable recording while the phone is locked or another app is ope
 
 ## Software validation
 
-This package passed **19 core tests** and **7 isolated Chromium integration tests**. All Bluetooth in the tests was simulated; none of these checks operated a real pad or Pixel.
+The automated checks use simulated Bluetooth and microphone capture. They do not operate a real pad or record a real microphone. The `0x67` profile was identified by inspecting live status from a connected PitPat-T01; motor movement has not been tested.
 
 The checks include published command byte vectors, bounds and malformed frames, write serialization and Stop priority, canceled commands across reconnects, pause/stop confirmation, stale and hidden-page behavior, interrupted recording, duration-weighted speed learning, stored-data injection, and mobile layout at 448 px and 360 px. The browser test observed no external runtime requests or JavaScript page errors. An independent source review was also completed.
 
-For developers, the core checks need only Node.js: run `node tests/core.test.cjs` from this folder. The optional browser suite is `node tests/browser.test.cjs`; it needs the `playwright` package and its Chromium browser installed in the development environment. Neither is needed to host or use the app.
+For developers, run `node tests/core.test.cjs` and `node tests/voice.test.cjs` with Node.js. These cover protocol framing and bounds, command ordering, workout history, low-storage refusal, actual write failures, microphone loss, stalled capture, and partial-audio preservation. The browser suite is `node tests/browser.test.cjs`; it needs the `playwright` package and its Chromium browser installed in the development environment. It also checks audio storage across reload and the automatic Stop request. Neither Node.js nor Playwright is needed to host or use the app.
 
 ## Provenance and license
 

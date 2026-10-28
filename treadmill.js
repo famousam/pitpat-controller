@@ -23,7 +23,7 @@
     selected: 1, usual: null, lastUserSpeedAt: -Infinity, tracker: new C.SessionTracker(),
     lastArchivedId: null, lastSavedAt: 0, lastHeartbeatAt: -Infinity,
     heartbeatPending: false, wake: null, wakePending: false, dragging: false,
-    transportFault: false
+    transportFault: false, notificationCount: 0, notificationShapes: []
   };
 
   function message(text, kind = '') {
@@ -34,6 +34,30 @@
   function storageWarning(text) {
     $('storageWarning').textContent = text;
     $('storageWarning').hidden = false;
+  }
+
+  function renderDiagnostics() {
+    $('notificationDiagnostics').value = [
+      `PitPat connection diagnostics · build ${C.VERSION}`,
+      `Notifications received: ${state.notificationCount}`,
+      'Expected framing: 0x68, or 60-byte 0x67; declared length equals received bytes; trailer 0x43.',
+      ...state.notificationShapes.map(item => `${item.count}× ${item.summary}\n${item.result}`)
+    ].join('\n');
+    $('copyDiagnosticsBtn').disabled = state.notificationCount === 0;
+  }
+
+  function recordNotification(value, result) {
+    state.notificationCount += 1;
+    let summary;
+    try { summary = C.describeNotification(value); }
+    catch (_) { summary = 'Notification did not contain a supported byte array.'; }
+    const existing = state.notificationShapes.find(item => item.summary === summary && item.result === result);
+    if (existing) existing.count += 1;
+    else {
+      state.notificationShapes.push({ summary, result, count: 1 });
+      if (state.notificationShapes.length > 6) state.notificationShapes.shift();
+    }
+    renderDiagnostics();
   }
 
   function readJSON(key, fallback) {
@@ -216,14 +240,16 @@
     let sample;
     try { sample = C.parseTelemetry(event.target.value); }
     catch (error) {
+      recordNotification(event.target.value, error.message);
       state.invalidReason = error.message;
       state.validCount = 0;
       state.queue.discardPending('Unsupported telemetry.');
       interruptRecord('Unsupported telemetry interrupted the recording.');
-      message(`${error.message} Stop can still be attempted while connected.`, 'warning');
+      message(`${error.message} Stop can still be attempted while connected. Open Connection details below and copy the diagnostics.`, 'warning');
       render();
       return;
     }
+    recordNotification(event.target.value, 'Compatible status accepted.');
     const now = performance.now();
     const previous = state.latest;
     const wasFresh = fresh();
@@ -319,6 +345,9 @@
       return;
     }
     const epoch = ++state.epoch;
+    state.notificationCount = 0;
+    state.notificationShapes = [];
+    renderDiagnostics();
     state.connecting = true;
     state.transportFault = false;
     render();
@@ -486,6 +515,23 @@
   $('speedSlider').addEventListener('change', () => { state.dragging = false; chooseSpeed(Number($('speedSlider').value)); });
   $('speedSlider').addEventListener('blur', () => { state.dragging = false; render(); });
   $('keepAwake').addEventListener('change', () => { saveSettings(); void updateWakeLock(); });
+  document.addEventListener('pitpat-voice-interrupted', () => {
+    if (linkWritable()) {
+      control('stop');
+      message('Voice recording was interrupted. Sending Stop; waiting for the pad to report stopped.', 'warning');
+    } else message('Voice recording was interrupted. Stop could not be sent over Bluetooth. Use the physical remote if the belt is moving.', 'warning');
+  });
+  $('copyDiagnosticsBtn').addEventListener('click', async () => {
+    const text = $('notificationDiagnostics').value;
+    try {
+      await navigator.clipboard.writeText(text);
+      $('diagnosticsStatus').textContent = 'Diagnostics copied. Paste them into the support conversation.';
+    } catch (_) {
+      $('notificationDiagnostics').focus();
+      $('notificationDiagnostics').select();
+      $('diagnosticsStatus').textContent = 'Select and copy the diagnostics text above.';
+    }
+  });
   $('exportBtn').addEventListener('click', () => {
     const current = state.tracker.snapshot();
     const payload = { format: 'pitpat-local-history', version: C.VERSION, exportedAt: new Date().toISOString(),
@@ -534,6 +580,7 @@
     archive({ ...unfinished, status: 'interrupted', incomplete: true, endedAt: Math.max(unfinished.startedAt, Date.now()), reason: 'The previous page closed or reloaded; unseen activity is not included.' });
   }
   $('buildVersion').textContent = `Improved ${C.VERSION} · upstream 17f94a6`;
+  renderDiagnostics();
   renderHistory();
   render();
   if (!compatibleBrowser) message('Open the published HTTPS address directly in Chrome on Android. Bluetooth is unavailable in this browser or embedded preview.', 'warning');

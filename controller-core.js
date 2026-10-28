@@ -1,5 +1,5 @@
 /*
- * PitPat WebBT — improved controller core, version 1.0.0.
+ * PitPat WebBT — improved controller core, version 1.1.0.
  * Protocol interoperability based on KeiranY/PitPat-WebBT (Unlicense) and
  * the documented BA09-B packet vectors in heilmic/treadmill-tray.
  * No hardware validation is implied. Receive checksums are NOT verified:
@@ -13,7 +13,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const SERVICE_UUID = '0000fba0-0000-1000-8000-00805f9b34fb';
   const WRITE_UUID = '0000fba1-0000-1000-8000-00805f9b34fb';
   const NOTIFY_UUID = '0000fba2-0000-1000-8000-00805f9b34fb';
@@ -67,17 +67,30 @@
     return packet;
   }
 
+  function notificationView(input) {
+    if (input instanceof DataView) return input;
+    if (input instanceof Uint8Array) return new DataView(input.buffer, input.byteOffset, input.byteLength);
+    throw error('FORMAT', 'Expected a Bluetooth notification byte array.');
+  }
+
+  // Describe framing only. Do not expose payloads, device serials, or counters.
+  function describeNotification(input) {
+    const view = notificationView(input);
+    const size = view.byteLength;
+    const byte = offset => offset >= 0 && offset < size ? `0x${view.getUint8(offset).toString(16).padStart(2, '0')}` : 'missing';
+    return `${size} bytes; header ${byte(0)}; declared length ${size > 1 ? view.getUint8(1) : 'missing'}; trailer ${byte(size - 1)}`;
+  }
+
   function parseTelemetry(input) {
-    let view;
-    if (input instanceof DataView) view = input;
-    else if (input instanceof Uint8Array) {
-      view = new DataView(input.buffer, input.byteOffset, input.byteLength);
-    } else throw error('FORMAT', 'Expected a Bluetooth notification byte array.');
+    const view = notificationView(input);
     const size = view.byteLength;
     if (size < 31 || size > 255) {
       throw error('FORMAT', 'Unsupported or incomplete treadmill notification length.');
     }
-    if (view.getUint8(0) !== 0x68 || view.getUint8(1) !== size || view.getUint8(size - 1) !== 0x43) {
+    // This PitPat-T01 firmware was observed sending a 60-byte 0x67 frame
+    // with the same status-field offsets. Keep other 0x67 lengths blocked.
+    const knownHeader = view.getUint8(0) === 0x68 || (view.getUint8(0) === 0x67 && size === 60);
+    if (!knownHeader || view.getUint8(1) !== size || view.getUint8(size - 1) !== 0x43) {
       throw error('FORMAT', 'Unrecognized treadmill frame; movement controls remain disabled.');
     }
     const speed = view.getUint16(3, false) / 1000;
@@ -454,7 +467,7 @@
 
   return Object.freeze({
     VERSION, SERVICE_UUID, WRITE_UUID, NOTIFY_UUID, MIN_SPEED, MAX_SPEED, STEP,
-    normalizeSpeed, makePacket, parseTelemetry, CommandQueue, SessionTracker,
+    normalizeSpeed, makePacket, parseTelemetry, describeNotification, CommandQueue, SessionTracker,
     validateStoredRecord, ValidateStoredRecord: validateStoredRecord
   });
 });
