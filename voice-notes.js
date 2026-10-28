@@ -143,6 +143,7 @@
     if (document.visibilityState !== 'visible') interrupt('The recording page was hidden. Recording stopped and a pad Stop request was attempted.');
   });
   document.addEventListener('freeze', () => interrupt('The browser suspended the recording page. Saved audio is partial.'));
+  document.addEventListener('pitpat-before-bluetooth-teardown', () => interrupt('The controller page is closing. Saved audio is partial.'));
   // Run before the Bluetooth pagehide teardown so Stop can still be attempted.
   window.addEventListener('pagehide', () => interrupt('The recording page was closed or reloaded. Saved audio is partial.'), { capture: true });
   void (async () => {
